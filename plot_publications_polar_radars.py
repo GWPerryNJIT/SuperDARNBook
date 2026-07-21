@@ -1,5 +1,6 @@
 import os
 import urllib.request
+import urllib.error
 import json
 import csv
 import io
@@ -10,6 +11,23 @@ import matplotlib.ticker as ticker
 import numpy as np
 import time
 from collections import defaultdict
+
+# Helper function with exponential backoff for rate-limited requests
+def fetch_with_retry(url, headers, max_retries=5):
+    delay = 1.0
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                return response.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                print(f"Rate limited (429). Retrying in {delay:.1f} seconds...")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise e
+    raise Exception("Max retries exceeded for rate-limiting (429)")
 
 # 1. Fetch official publications from SuperDARN Canada CSV database
 print("Fetching official publications from SuperDARN Canada...")
@@ -83,9 +101,9 @@ for i in range(0, len(dois), batch_size):
     filter_str = ','.join([f'doi:{d}' for d in clean_batch])
     filter_str_esc = urllib.parse.quote(filter_str, safe=':,')
     url = f'https://api.crossref.org/works?filter={filter_str_esc}&rows=50&select=DOI,title,abstract,is-referenced-by-count'
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (mailto:test@example.com)'})
+    headers = {'User-Agent': 'Mozilla/5.0 (mailto:test@example.com)'}
     try:
-        res = urllib.request.urlopen(req).read()
+        res = fetch_with_retry(url, headers)
         data = json.loads(res)
         for item in data.get('message', {}).get('items', []):
             d = item.get('DOI', '').lower()
@@ -104,7 +122,7 @@ for i in range(0, len(dois), batch_size):
                         polar_radar_publications_by_year[y] += 1
                         polar_citations_by_year[y] += c
                     break
-        time.sleep(0.05)
+        time.sleep(0.1)
     except Exception as e:
         print(f"Error fetching batch {i}: {e}")
 
@@ -120,9 +138,9 @@ for paper in unresolved_papers:
     query = f"{title} {author}"
     query_esc = urllib.parse.quote(query)
     url = f"https://api.crossref.org/works?query={query_esc}&rows=1&select=DOI,title,abstract,is-referenced-by-count"
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (mailto:test@example.com)'})
+    headers = {'User-Agent': 'Mozilla/5.0 (mailto:test@example.com)'}
     try:
-        res = urllib.request.urlopen(req).read()
+        res = fetch_with_retry(url, headers)
         data = json.loads(res)
         items = data.get('message', {}).get('items', [])
         if items:
@@ -137,7 +155,7 @@ for paper in unresolved_papers:
             if is_polar_radar:
                 polar_radar_publications_by_year[year] += 1
                 polar_citations_by_year[year] += c
-        time.sleep(0.05)
+        time.sleep(0.1)
     except Exception as e:
         pass
 
@@ -201,8 +219,8 @@ ax2.grid(False)
 ax1.set_title("SuperDARN publications: Impact of polar radar research (\u226570\u00b0 MLAT) (1980 - 2025)", 
              fontsize=30, pad=35, color='#111111', fontweight='bold')
 ax1.set_xlabel('Year', fontsize=24, labelpad=25, color='#333333')
-ax1.set_ylabel('Annual Publications (Bars)', fontsize=24, labelpad=25, color='#333333', fontweight='bold')
-ax2.set_ylabel('Cumulative Citations (Lines)', fontsize=24, labelpad=25, color='#111111', fontweight='bold')
+ax1.set_ylabel('Annual Publications (Bars)', fontsize=24, labelpad=25, color='#333333')
+ax2.set_ylabel('Cumulative Citations (Lines)', fontsize=24, labelpad=25, color='#111111')
 
 # Formatting Spines
 for ax in [ax1, ax2]:
